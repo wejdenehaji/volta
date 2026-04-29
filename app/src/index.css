@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root {
+    --bg-base: #0B0B0F;
+    --surface: #151519;
+    --surface-hover: #1E1E24;
+    --border: #2A2A30;
+    --border-strong: #3A3A42;
+    --text-primary: #EAEAEA;
+    --text-secondary: #888790;
+    --text-tertiary: #555560;
+    --text-disabled: #333340;
+    --brand: #00E56B;
+    --brand-hover: #33EE88;
+    --brand-tint: #0A3D2C;
+    --brand-on: #001A0D;
+    --warning: #EF9F27;
+    --warning-tint: #3D2400;
+    --error: #E24B4A;
+    --error-tint: #3D0A0A;
+
+    --background: 240 7% 4%;
+    --foreground: 0 0% 92%;
+    --card: 240 7% 8%;
+    --card-foreground: 0 0% 92%;
+    --popover: 240 7% 8%;
+    --popover-foreground: 0 0% 92%;
+    --primary: 151 100% 45%;
+    --primary-foreground: 148 100% 5%;
+    --secondary: 240 6% 9%;
+    --secondary-foreground: 0 0% 53%;
+    --muted: 240 6% 9%;
+    --muted-foreground: 240 5% 33%;
+    --accent: 151 100% 14%;
+    --accent-foreground: 151 100% 45%;
+    --destructive: 0 65% 58%;
+    --destructive-foreground: 0 0% 92%;
+    --border: 240 5% 16%;
+    --input: 240 5% 16%;
+    --ring: 151 100% 45%;
+    --radius: 0.625rem;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .font-data {
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .font-logo {
+    font-family: Georgia, serif;
+  }
+  .section-header {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-tertiary);
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
