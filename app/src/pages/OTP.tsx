@@ -1,332 +1,417 @@
 import { useEffect, useRef, useState } from 'react';
+import { verifyOTP } from '../lib/api';
+import { sendOTP } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
-import { useOTP } from '@/hooks/useOTP';
+import { ArrowLeft, Clock, Mail, Phone, CheckCircle, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { useReservation } from '../context/ReservationContext';
+import BookingStepper from '../components/BookingStepper';
 
-interface OTPPageProps {
-  phone?: string;
-  email?: string;
-  channel?: 'sms' | 'email';
-}
+type Status = 'idle' | 'sending' | 'sent' | 'verifying' | 'success' | 'error';
+type Channel = 'email' | 'sms';
 
-export default function OTPPage({
-  phone = '+21698765447',
-  email: emailProp,
-  channel = 'email', // ← changed default to 'email'
-}: OTPPageProps) {
+export default function OTPPage() {
   const navigate = useNavigate();
-  const [sessionTimer, setSessionTimer] = useState(600);
+  const { reservation, update } = useReservation();
+
+  const [channel, setChannel] = useState<Channel>('email');
+  const [email, setEmail] = useState(reservation.userEmail || '');
+  const [phone, setPhone] = useState(reservation.userPhone || '');
+  const [fieldError, setFieldError] = useState('');
+  const [fieldTouched, setFieldTouched] = useState(false);
+  const [status, setStatus] = useState<Status>('idle');
   const [code, setCode] = useState(['', '', '', '', '', '']);
-  const [overridePhone, setOverridePhone] = useState('');
-  const [showAltPhone, setShowAltPhone] = useState(false);
-
-  // ── NEW: let user type their email if not passed as prop ──────────────
-  const [emailInput, setEmailInput] = useState(emailProp ?? '');
-  const [emailError, setEmailError] = useState('');
-  const emailInputRef = useRef<HTMLInputElement>(null);
-  // ─────────────────────────────────────────────────────────────────────
-
+  const [codeError, setCodeError] = useState('');
+  const [resendTimer, setResendTimer] = useState(0);
+  const [sessionTimer, setSessionTimer] = useState(300);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const fieldRef = useRef<HTMLInputElement>(null);
 
-  const resolvedEmail = channel === 'email' ? emailInput.trim() : undefined;
-  const resolvedPhone = channel === 'sms'
-    ? (showAltPhone && overridePhone ? overridePhone : phone)
-    : undefined;
-
-  const {
-    status, errorMsg, attemptsLeft, resendCountdown,
-    send, verify, reset,
-    isSending, isSent, isVerifying, isSuccess, isLocked, canResend,
-  } = useOTP({
-    channel,
-    phone: resolvedPhone,
-    email: resolvedEmail,
-    onSuccess: () => setTimeout(() => navigate('/app/summary'), 800),
-  });
-
-  // Session countdown
   useEffect(() => {
-    const t = setInterval(() => setSessionTimer(s => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(t);
+    if (!reservation.station) navigate('/app/map');
   }, []);
 
-  // Focus first OTP input when sent
   useEffect(() => {
-    if (isSent) setTimeout(() => inputRefs.current[0]?.focus(), 100);
-  }, [isSent]);
+    const iv = setInterval(() => setSessionTimer(t => Math.max(0, t - 1)), 1000);
+    return () => clearInterval(iv);
+  }, []);
 
-  // Clear code on error
   useEffect(() => {
-    if (errorMsg && isSent && !isVerifying) {
-      setCode(['', '', '', '', '', '']);
-      setTimeout(() => inputRefs.current[0]?.focus(), 50);
-    }
-  }, [errorMsg]);
+    if (resendTimer <= 0) return;
+    const iv = setInterval(() => setResendTimer(t => Math.max(0, t - 1)), 1000);
+    return () => clearInterval(iv);
+  }, [resendTimer]);
 
-  // ── NEW: validate email before sending ───────────────────────────────
-  const handleSend = () => {
-    if (channel === 'email') {
-      const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.trim());
-      if (!valid) {
-        setEmailError('Please enter a valid email address.');
-        emailInputRef.current?.focus();
-        return;
-      }
-      setEmailError('');
+  useEffect(() => {
+    if (status === 'sent') {
+      setTimeout(() => inputRefs.current[0]?.focus(), 100);
     }
-    send(channel === 'sms' && showAltPhone ? overridePhone : undefined);
+  }, [status]);
+
+  // Reset field state when switching channels
+  useEffect(() => {
+    setFieldError('');
+    setFieldTouched(false);
+  }, [channel]);
+
+  const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+  const isValidPhone = (v: string) => /^\+\d{8,15}$/.test(v.trim());
+
+  const currentValue = channel === 'email' ? email : phone;
+  const isValid = channel === 'email' ? isValidEmail(email) : isValidPhone(phone);
+  const fieldIsInvalid = fieldTouched && currentValue.length > 0 && !isValid;
+  const fieldIsValid = currentValue.length > 0 && isValid;
+
+  const handleFieldBlur = () => {
+    setFieldTouched(true);
+    if (currentValue && !isValid) {
+      setFieldError(
+        channel === 'email'
+          ? 'Please enter a valid email address'
+          : 'Please enter a valid phone number (e.g. +21612345678)'
+      );
+    } else {
+      setFieldError('');
+    }
   };
-  // ─────────────────────────────────────────────────────────────────────
 
-  const handleDigitChange = (index: number, val: string) => {
+  const handleSend = async () => {
+    setFieldTouched(true);
+    if (!isValid) {
+      setFieldError(
+        channel === 'email'
+          ? 'Please enter a valid email address'
+          : 'Please enter a valid phone number (e.g. +21612345678)'
+      );
+      fieldRef.current?.focus();
+      return;
+    }
+    setFieldError('');
+    setStatus('sending');
+
+    try {
+      const payload =
+        channel === 'email'
+          ? { channel: 'email' as const, email }
+          : { channel: 'sms' as const, phone };
+
+      const result = await sendOTP(payload);
+
+      if (result.success) {
+        if (channel === 'email') update({ userEmail: email });
+        else update({ userPhone: phone });
+        setStatus('sent');
+        setResendTimer(60);
+      } else {
+        setFieldError(result.message || 'Failed to send code');
+        setStatus('idle');
+      }
+    } catch (err) {
+      setFieldError('Network error. Is the backend running?');
+      setStatus('idle');
+    }
+  };
+
+  const handleDigit = (i: number, val: string) => {
     if (!/^\d*$/.test(val)) return;
     const next = [...code];
-    next[index] = val.slice(-1);
+    next[i] = val.slice(-1);
     setCode(next);
-    if (val && index < 5) inputRefs.current[index + 1]?.focus();
-    if (index === 5 && val) {
+    setCodeError('');
+    if (val && i < 5) inputRefs.current[i + 1]?.focus();
+    if (i === 5 && val) {
       const full = [...next.slice(0, 5), val.slice(-1)].join('');
-      if (full.length === 6) setTimeout(() => verify(full), 200);
+      if (full.length === 6) handleVerify(full);
     }
   };
 
-  const handleKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !code[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
+  const handleKeyDown = (i: number, e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && !code[i] && i > 0) {
+      inputRefs.current[i - 1]?.focus();
     }
   };
 
-  const mins = Math.floor(sessionTimer / 60);
-  const secs = sessionTimer % 60;
-  const isError = !!errorMsg && !isVerifying;
+  const handleVerify = async (fullCode: string) => {
+    setStatus('verifying');
 
-  // Masked display for confirmed email
-  const maskedEmail = emailInput.includes('@')
-    ? `${emailInput.split('@')[0].slice(0, 2)}***@${emailInput.split('@')[1]}`
-    : emailInput;
-  const maskedPhone = `${phone?.slice(0, 4)} •• •• •• ${phone?.slice(-2)}`;
+    try {
+      const payload =
+        channel === 'email'
+          ? { code: fullCode, email }
+          : { code: fullCode, phone };
+
+      const result = await verifyOTP(payload);
+
+      if (result.success) {
+        setStatus('success');
+        setTimeout(() => navigate('/app/summary'), 900);
+      } else {
+        setStatus('error');
+        setCodeError(result.message || 'Invalid code');
+        setCode(['', '', '', '', '', '']);
+        setTimeout(() => {
+          setStatus('sent');
+          inputRefs.current[0]?.focus();
+        }, 800);
+      }
+    } catch (err) {
+      setStatus('error');
+      setCodeError('Connection lost. Try again.');
+    }
+  };
+
+  const handleResend = async () => {
+    setCode(['', '', '', '', '', '']);
+    setCodeError('');
+    setStatus('sending');
+    await new Promise(r => setTimeout(r, 800));
+    setStatus('sent');
+    setResendTimer(60);
+    setTimeout(() => inputRefs.current[0]?.focus(), 100);
+  };
+
+  const maskedIdentifier =
+    channel === 'email' && email.includes('@')
+      ? `${email.split('@')[0].slice(0, 2)}***@${email.split('@')[1]}`
+      : channel === 'sms' && phone.length > 4
+      ? `${phone.slice(0, 4)}****${phone.slice(-2)}`
+      : currentValue;
+
+  const sessionMin = Math.floor(sessionTimer / 60);
+  const sessionSec = sessionTimer % 60;
+  const sessionCritical = sessionTimer < 60;
 
   return (
-    <div className="w-full max-w-[390px] mx-auto bg-bg-base min-h-[100dvh] flex flex-col">
-
-      {/* ── Header ───────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-3">
-        <button
-          onClick={() => navigate('/app/vehicle')}
-          disabled={isVerifying || isSuccess}
-          className="p-2 -ml-2 disabled:opacity-40"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-            stroke="#EAEAEA" strokeWidth="1.5" strokeLinecap="round">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
+    <div className="page-container" style={{ maxWidth: 640 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/app/vehicle')} style={{ gap: 6 }}>
+          <ArrowLeft size={15} />
+          Back
         </button>
-        <h1 className="text-[17px] font-medium text-text-primary">
-          {channel === 'email' ? 'Verify your email' : 'Verify your number'}
-        </h1>
-        <div className={`font-mono text-[13px] font-medium ${sessionTimer < 60 ? 'text-error' : 'text-warning'}`}>
-          {mins}:{secs.toString().padStart(2, '0')}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 14px',
+          background: sessionCritical ? 'var(--error-tint)' : 'var(--surface-2)',
+          border: `1px solid ${sessionCritical ? 'var(--error)' : 'var(--border-default)'}`,
+          borderRadius: 100,
+        }}>
+          <Clock size={13} color={sessionCritical ? 'var(--error)' : 'var(--text-tertiary)'} />
+          <span style={{
+            fontFamily: 'DM Mono, monospace', fontSize: 13, fontWeight: 500,
+            color: sessionCritical ? 'var(--error)' : 'var(--text-secondary)',
+          }}>
+            {sessionMin}:{sessionSec.toString().padStart(2, '0')}
+          </span>
         </div>
       </div>
 
-      <div className="flex-1 px-4 pb-4">
+      <BookingStepper currentPath="/app/otp" />
 
-        {/* ── PRE-SEND ─────────────────────────────────────────────────────── */}
-        {!isSent && (
-          <div className="animate-slide-up">
-            <p className="text-[14px] text-text-secondary text-center mb-8">
-              We'll send a one-time code to confirm your identity.
-            </p>
+      <div className="card-elevated" style={{ padding: '40px 48px', maxWidth: 480, margin: '0 auto' }}>
+        {/* Icon */}
+        <div style={{
+          width: 48, height: 48, borderRadius: 12,
+          background: 'var(--green-muted)',
+          border: '1px solid #00c85330',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          marginBottom: 24,
+        }}>
+          {channel === 'email'
+            ? <Mail size={22} color="var(--green)" />
+            : <Phone size={22} color="var(--green)" />}
+        </div>
 
-            {/* ── EMAIL INPUT (new) ───────────────────────────────────────── */}
-            {channel === 'email' && (
-              <div className="mb-4">
-                <div className="p-4 bg-surface border border-border-subtle rounded-xl">
-                  <div className="text-[11px] text-text-tertiary uppercase tracking-wide mb-1">
-                    Your email address
-                  </div>
-                  <input
-                    ref={emailInputRef}
-                    type="email"
-                    value={emailInput}
-                    onChange={e => { setEmailInput(e.target.value); setEmailError(''); }}
-                    onKeyDown={e => e.key === 'Enter' && handleSend()}
-                    placeholder="you@example.com"
-                    disabled={isSending}
-                    className="w-full bg-transparent text-[15px] text-text-primary
-                               placeholder:text-text-tertiary outline-none disabled:opacity-50"
+        <h2 style={{ margin: '0 0 8px', fontSize: 22 }}>Verify your identity</h2>
+        <p style={{ margin: '0 0 24px', fontSize: 14 }}>
+          {status === 'idle' || status === 'sending'
+            ? "We'll send a one-time code to confirm your booking."
+            : `Code sent to ${maskedIdentifier}`}
+        </p>
+
+        {/* Channel toggle — only shown before sending */}
+        {(status === 'idle' || status === 'sending') && (
+          <div style={{
+            display: 'flex', gap: 8, marginBottom: 24,
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border-default)',
+            borderRadius: 10, padding: 4,
+          }}>
+            {(['email', 'sms'] as Channel[]).map(ch => (
+              <button
+                key={ch}
+                onClick={() => setChannel(ch)}
+                style={{
+                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  gap: 6, padding: '8px 0', borderRadius: 7, border: 'none',
+                  cursor: 'pointer', fontSize: 13, fontWeight: 500, transition: 'all 150ms',
+                  background: channel === ch ? 'var(--surface-1)' : 'transparent',
+                  color: channel === ch ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                  boxShadow: channel === ch ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                }}
+              >
+                {ch === 'email' ? <Mail size={13} /> : <Phone size={13} />}
+                {ch === 'email' ? 'Email' : 'SMS'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Input phase */}
+        {(status === 'idle' || status === 'sending') && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }} className="animate-fade-in">
+            <div>
+              <label className="field-label">
+                {channel === 'email' ? 'Email address' : 'Phone number'}
+              </label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  ref={fieldRef}
+                  type={channel === 'email' ? 'email' : 'tel'}
+                  className={`field-input ${fieldIsInvalid ? 'is-invalid' : fieldIsValid ? 'is-valid' : ''}`}
+                  value={channel === 'email' ? email : phone}
+                  onChange={e => {
+                    setFieldError('');
+                    if (channel === 'email') setEmail(e.target.value);
+                    else setPhone(e.target.value);
+                  }}
+                  onBlur={handleFieldBlur}
+                  placeholder={channel === 'email' ? 'you@example.com' : '+21612345678'}
+                  disabled={status === 'sending'}
+                  style={{ fontSize: 15 }}
+                />
+                {fieldIsValid && (
+                  <CheckCircle
+                    size={16}
+                    color="var(--green)"
+                    style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
                   />
-                </div>
-                {emailError && (
-                  <p className="text-[12px] text-error mt-1 pl-1">{emailError}</p>
                 )}
               </div>
-            )}
-            {/* ─────────────────────────────────────────────────────────────── */}
-
-            {/* SMS: show masked phone on file */}
-            {channel === 'sms' && (
-              <div className="p-4 bg-surface border border-border-subtle rounded-xl mb-4">
-                <div className="text-[11px] text-text-tertiary uppercase tracking-wide mb-1">
-                  Owner number on file
+              {(fieldError || fieldIsInvalid) && (
+                <div className="field-error">
+                  <AlertCircle size={12} />
+                  {fieldError || (channel === 'email' ? 'Please enter a valid email address' : 'Please enter a valid phone number')}
                 </div>
-                <div className="font-mono text-[15px] text-text-primary tracking-wide">
-                  {maskedPhone}
-                </div>
+              )}
+              <div className="field-hint">
+                {channel === 'email'
+                  ? "We'll send a 6-digit code. No account required."
+                  : 'Include your country code (e.g. +216…). No account required.'}
               </div>
-            )}
+            </div>
 
-            {channel === 'sms' && (
-              <>
-                <button
-                  onClick={() => setShowAltPhone(!showAltPhone)}
-                  className="text-[13px] text-brand hover:text-brand-hover transition-colors mb-4 block"
-                >
-                  Use a different number for this session →
-                </button>
-                {showAltPhone && (
-                  <div className="px-3 py-3 bg-surface border border-border-subtle rounded-xl mb-4 animate-slide-up">
-                    <input
-                      type="tel"
-                      value={overridePhone}
-                      onChange={e => setOverridePhone(e.target.value)}
-                      placeholder="+216 ..."
-                      className="w-full bg-transparent text-[14px] text-text-primary placeholder:text-text-tertiary outline-none"
-                    />
-                  </div>
-                )}
-              </>
-            )}
-
-            {errorMsg && (
-              <div className="px-3 py-2 bg-error-tint border border-error rounded-lg mb-4">
-                <p className="text-[13px] text-error">{errorMsg}</p>
-              </div>
-            )}
-
-            {/* ── Send button now calls handleSend ───────────────────────── */}
             <button
+              className="btn btn-primary btn-lg"
+              style={{ width: '100%' }}
               onClick={handleSend}
-              disabled={isSending}
-              className="w-full py-3 bg-brand text-brand-on rounded-lg text-[13px] font-medium
-                         hover:bg-brand-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed
-                         flex items-center justify-center gap-2"
+              disabled={status === 'sending'}
             >
-              {isSending
-                ? <><Spinner /> Sending...</>
-                : 'Send code'
-              }
+              {status === 'sending' ? (
+                <>
+                  <Loader2 size={16} className="animate-spin-slow" />
+                  Sending code...
+                </>
+              ) : (
+                'Send verification code'
+              )}
             </button>
           </div>
         )}
 
-        {/* ── POST-SEND ──────────────────────────────────────────────────────── */}
-        {isSent && (
-          <div className="animate-slide-up">
-            <p className="text-[14px] text-text-secondary text-center mb-1">
-              Enter the 6-digit code sent to
-            </p>
-            {/* ── Show where the code was sent ──────────────────────────── */}
-            <p className="text-[13px] text-brand text-center font-mono mb-6">
-              {channel === 'email' ? maskedEmail : maskedPhone}
-            </p>
-
-            {/* Code boxes */}
-            <div className={`flex gap-2 justify-center mb-4 ${isError ? 'animate-shake' : ''}`}>
-              {code.map((digit, i) => (
-                <div key={i} className={`w-12 h-14 flex items-center justify-center rounded-lg border-2 transition-all ${
-                  isSuccess ? 'bg-brand-tint border-brand'
-                  : isError  ? 'bg-error-tint border-error'
-                  : digit    ? 'bg-surface border-brand'
-                  :            'bg-surface border-border-subtle'
-                }`}>
+        {/* OTP entry phase */}
+        {(status === 'sent' || status === 'verifying' || status === 'error' || status === 'success') && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }} className="animate-fade-in">
+            <div>
+              <label className="field-label" style={{ marginBottom: 12 }}>6-digit code</label>
+              <div style={{ display: 'flex', gap: 8, overflow: 'hidden' }}>
+                {code.map((digit, i) => (
                   <input
+                    key={i}
                     ref={el => { inputRefs.current[i] = el; }}
                     type="text"
                     inputMode="numeric"
                     maxLength={1}
                     value={digit}
-                    onChange={e => handleDigitChange(i, e.target.value)}
+                    onChange={e => handleDigit(i, e.target.value)}
                     onKeyDown={e => handleKeyDown(i, e)}
-                    disabled={isVerifying || isSuccess || isLocked}
-                    className="w-full h-full bg-transparent text-center font-mono text-[22px]
-                               font-medium text-text-primary outline-none disabled:opacity-50"
+                    disabled={status === 'verifying' || status === 'success'}
+                    style={{
+                      width: 0, flex: 1, height: 52, textAlign: 'center',
+                      fontFamily: 'DM Mono, monospace', fontSize: 22, fontWeight: 500,
+                      background: status === 'success'
+                        ? 'var(--green-muted)'
+                        : status === 'error'
+                        ? 'var(--error-tint)'
+                        : 'var(--surface-2)',
+                      border: `1px solid ${
+                        status === 'success' ? 'var(--green)' :
+                        status === 'error' ? 'var(--error)' :
+                        digit ? 'var(--green)' : 'var(--border-default)'}`,
+                      borderRadius: 10,
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      transition: 'all 150ms',
+                      caretColor: 'var(--green)',
+                    }}
                   />
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
 
-            {/* Spinner / Success icon */}
-            <div className="flex justify-center mb-4 h-10">
-              {isVerifying && <Spinner color="#00c853" size={24} />}
-              {isSuccess && (
-                <div className="w-10 h-10 rounded-full bg-brand flex items-center justify-center">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                    stroke="#001A0D" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
+              {status === 'verifying' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginTop: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
+                  <Loader2 size={15} className="animate-spin-slow" color="var(--green)" />
+                  Verifying...
+                </div>
+              )}
+
+              {status === 'success' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginTop: 16, color: 'var(--green)', fontSize: 13, fontWeight: 500 }}>
+                  <CheckCircle size={16} color="var(--green)" />
+                  Identity verified! Redirecting...
+                </div>
+              )}
+
+              {codeError && status !== 'verifying' && (
+                <div className="field-error" style={{ justifyContent: 'center', marginTop: 12 }}>
+                  <AlertCircle size={12} />
+                  {codeError}
                 </div>
               )}
             </div>
 
-            {/* Error message */}
-            {isError && !isLocked && (
-              <div className="px-3 py-2 bg-error-tint border border-error rounded-lg mb-4">
-                <p className="text-[13px] text-error text-center">{errorMsg}</p>
-              </div>
-            )}
-
-            {/* Locked state */}
-            {isLocked && (
-              <div className="px-3 py-3 bg-error-tint border border-error rounded-lg mb-4 text-center">
-                <p className="text-[13px] text-error font-medium mb-1">Code locked</p>
-                <p className="text-[12px] text-error opacity-80">Too many attempts. Please request a new code.</p>
-                <button
-                  onClick={reset}
-                  className="mt-2 text-[12px] text-brand underline"
-                >
-                  Request new code
-                </button>
-              </div>
-            )}
-
             {/* Resend */}
-            {!isSuccess && !isLocked && (
-              <div className="text-center mb-3">
-                {canResend ? (
-                  <button
-                    onClick={() => send()}
-                    className="text-[13px] text-brand hover:text-brand-hover transition-colors"
-                  >
-                    Resend code
-                  </button>
-                ) : (
-                  <span className="text-[13px] text-text-tertiary">
-                    Resend in 0:{resendCountdown.toString().padStart(2, '0')}
-                  </span>
-                )}
-              </div>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13 }}>
+              <span style={{ color: 'var(--text-tertiary)' }}>Didn't receive it?</span>
+              {resendTimer > 0 ? (
+                <span style={{ color: 'var(--text-tertiary)', fontFamily: 'DM Mono, monospace' }}>
+                  Resend in {resendTimer}s
+                </span>
+              ) : (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={handleResend}
+                  style={{ color: 'var(--green)', gap: 5 }}
+                >
+                  <RefreshCw size={12} />
+                  Resend code
+                </button>
+              )}
+            </div>
 
-            {/* Attempts badge */}
-            {!isSuccess && !isLocked && attemptsLeft < 3 && (
-              <p className={`text-center text-[11px] ${attemptsLeft === 1 ? 'text-error' : 'text-text-tertiary'}`}>
-                {attemptsLeft} attempt{attemptsLeft === 1 ? '' : 's'} remaining
-              </p>
-            )}
+            {/* Change contact */}
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => { setStatus('idle'); setCode(['', '', '', '', '', '']); setCodeError(''); setFieldTouched(false); setFieldError(''); }}
+              style={{ color: 'var(--text-tertiary)', alignSelf: 'center', fontSize: 12 }}
+            >
+              Use a different {channel === 'email' ? 'email' : 'number'}
+            </button>
           </div>
         )}
       </div>
-    </div>
-  );
-}
 
-// ── Small reusable spinner ────────────────────────────────────────────────────
-function Spinner({ color = 'currentColor', size = 16 }: { color?: string; size?: number }) {
-  return (
-    <svg className="animate-spin" width={size} height={size} viewBox="0 0 24 24"
-      fill="none" stroke={color} strokeWidth="2">
-      <circle cx="12" cy="12" r="10" strokeOpacity="0.2" />
-      <path d="M12 2a10 10 0 0 1 10 10" />
-    </svg>
+      <div style={{ marginTop: 20, textAlign: 'center', fontSize: 12, color: 'var(--text-tertiary)' }}>
+        Demo tip: use code <span style={{ fontFamily: 'DM Mono, monospace', color: 'var(--green)' }}>123456</span>
+      </div>
+    </div>
   );
 }

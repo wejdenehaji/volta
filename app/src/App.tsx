@@ -1,5 +1,9 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useAppState } from '@/hooks/useAppState';
+import "leaflet/dist/leaflet.css";
+import { ReservationProvider } from '@/context/ReservationContext';
+import Sidebar from '@/components/Sidebar';
+import ProtectedRoute from '@/components/ProtectedRoute';
 import Landing from '@/pages/Landing';
 import Onboarding from '@/pages/Onboarding';
 import MapDiscovery from '@/pages/MapDiscovery';
@@ -14,40 +18,151 @@ import Handshake from '@/pages/Handshake';
 import ActiveCharging from '@/pages/ActiveCharging';
 import Receipt from '@/pages/Receipt';
 import SoftConversion from '@/pages/SoftConversion';
+import SignIn from '@/pages/SignIn';
+
+// Pages that show the sidebar
+function AppLayout() {
+  return (
+    <div style={{
+      display: 'flex',
+      height: '100vh',
+      background: 'var(--bg-base)',
+      overflow: 'hidden',
+    }}>
+      <Sidebar />
+      <main style={{ flex: 1, overflowY: 'auto' }}>
+        <Outlet />
+      </main>
+    </div>
+  );
+}
 
 function AppRoutes() {
   const { state } = useAppState();
 
   return (
     <Routes>
+      {/* ── No sidebar ── */}
       <Route path="/" element={<Landing />} />
+      <Route path="/app/signin" element={<SignIn />} />
       <Route
         path="/app"
         element={
-          state.onboardingComplete ? (
-            <Navigate to="/app/map" replace />
-          ) : (
-            <Onboarding />
-          )
+          state.onboardingComplete
+            ? <Navigate to="/app/map" replace />
+            : <Onboarding />
         }
       />
       <Route path="/app/onboarding" element={<Onboarding />} />
-      <Route path="/app/map" element={<MapDiscovery />} />
-      <Route path="/app/time-slot" element={<TimeSlot />} />
-      <Route path="/app/vehicle" element={<VehicleID />} />
-      <Route path="/app/foreign-vehicle" element={<ForeignVehicle />} />
-      <Route path="/app/otp" element={<OTP />} />
-      <Route path="/app/summary" element={<Summary />} />
-      <Route path="/app/payment" element={<Payment />} />
-      <Route path="/app/qr" element={<QRConfirmation />} />
-      <Route path="/app/handshake" element={<Handshake />} />
-      <Route path="/app/charging" element={<ActiveCharging />} />
-      <Route path="/app/receipt" element={<Receipt />} />
-      <Route path="/app/convert" element={<SoftConversion />} />
+
+      {/* ── With sidebar ── */}
+      <Route element={<AppLayout />}>
+        {/* Protected — requires Keycloak login */}
+        <Route
+          path="/app/map"
+          element={
+            <ProtectedRoute>
+              <MapDiscovery />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/time-slot"
+          element={
+            <ProtectedRoute>
+              <TimeSlot />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/vehicle"
+          element={
+            <ProtectedRoute>
+              <VehicleID />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/foreign-vehicle"
+          element={
+            <ProtectedRoute>
+              <ForeignVehicle />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/otp"
+          element={
+            <ProtectedRoute>
+              <OTP />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/summary"
+          element={
+            <ProtectedRoute>
+              <Summary />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/payment"
+          element={
+            <ProtectedRoute>
+              <Payment />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/qr"
+          element={
+            <ProtectedRoute>
+              <QRConfirmation />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/handshake"
+          element={
+            <ProtectedRoute>
+              <Handshake />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/charging"
+          element={
+            <ProtectedRoute>
+              <ActiveCharging />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/receipt"
+          element={
+            <ProtectedRoute>
+              <Receipt />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/app/convert"
+          element={
+            <ProtectedRoute>
+              <SoftConversion />
+            </ProtectedRoute>
+          }
+        />
+      </Route>
     </Routes>
   );
 }
 
 export default function App() {
-  return <AppRoutes />;
+  return (
+    <ReservationProvider>
+      <AppRoutes />
+    </ReservationProvider>
+  );
 }

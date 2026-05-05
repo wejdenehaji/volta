@@ -1,157 +1,321 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, Clock, Check, AlertCircle, Car, ChevronRight, Camera,Loader2 } from 'lucide-react';
+import { useReservation } from '../context/ReservationContext';
+import BookingStepper from '../components/BookingStepper';
 
 const plateTabs = ['TUN', 'RS', 'PE', 'DIP'];
 
+
 export default function VehicleID() {
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+const [isScanning, setIsScanning] = useState(false); // New: to show loading
+  const { reservation, update } = useReservation();
   const [activeTab, setActiveTab] = useState('TUN');
-  const [plateNumber, setPlateNumber] = useState('');
+  const [plateNumber, setPlateNumber] = useState(reservation.vehiclePlate || '');
   const [chassis, setChassis] = useState('');
   const [vehicleConfirmed, setVehicleConfirmed] = useState(false);
+  const [plateError, setPlateError] = useState('');
   const [timer, setTimer] = useState(201);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => setTimer(t => (t > 0 ? t - 1 : 0)), 1000);
-    return () => clearInterval(interval);
+    if (!reservation.station) navigate('/app/map');
+  }, [reservation.station, navigate]);
+
+  useEffect(() => {
+    const iv = setInterval(() => setTimer(t => t > 0 ? t - 1 : 0), 1000);
+    return () => clearInterval(iv);
   }, []);
 
   useEffect(() => {
     if (plateNumber.length >= 5) {
-      const t = setTimeout(() => setVehicleConfirmed(true), 600);
+      const t = setTimeout(() => {
+        setVehicleConfirmed(true);
+        setPlateError('');
+      }, 600);
       return () => clearTimeout(t);
     } else {
       setVehicleConfirmed(false);
     }
   }, [plateNumber]);
 
-  const minutes = Math.floor(timer / 60);
-  const seconds = timer % 60;
-  const timerColor = timer < 30 ? 'text-error' : 'text-warning';
-
   const handlePlateChange = (val: string) => {
     const cleaned = val.toUpperCase().replace(/[^A-Z0-9\s]/g, '');
     setPlateNumber(cleaned);
+    setPlateError('');
+  };
+const handleOCR = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  setIsScanning(true);
+  setPlateError('Scanning document...');
+
+  const formData = new FormData();
+  formData.append('document', file);
+
+  try {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/ocr/scan-carte-grise`, {
+      method: 'POST',
+      body: formData,
+      // Note: Don't set Content-Type header when sending FormData; 
+      // the browser will set it automatically with the boundary.
+    });
+    
+    const data = await response.json();
+    
+    if (data.success) {
+      setPlateNumber(data.plate || '');
+      setChassis(data.chassis || '');
+      setPlateError('');
+    } else {
+      setPlateError('Could not read document. Please enter manually.');
+    }
+  } catch (err) {
+    setPlateError('OCR Service unavailable.');
+  } finally {
+    setIsScanning(false);
+  }
+};
+  const handleContinue = () => {
+    if (plateNumber.length < 4) {
+      setPlateError('Please enter a valid plate number (at least 4 characters)');
+      inputRef.current?.focus();
+      return;
+    }
+    update({ vehiclePlate: plateNumber, vehicleBrand: vehicleConfirmed ? 'Tesla Model 3' : '' });
+    navigate('/app/otp');
   };
 
+  const minutes = Math.floor(timer / 60);
+  const seconds = timer % 60;
+  const timerCritical = timer < 30;
+
   return (
-    <div className="w-full max-w-[390px] mx-auto bg-bg-base min-h-[100dvh] flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-3">
-        <button onClick={() => navigate('/app/time-slot')} className="p-2 -ml-2">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EAEAEA" strokeWidth="1.5" strokeLinecap="round">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
+    <div className="page-container" style={{ maxWidth: 760 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/app/time-slot')} style={{ gap: 6 }}>
+          <ArrowLeft size={15} />
+          Back
         </button>
-        <h1 className="text-[17px] font-medium text-text-primary">Identify your vehicle</h1>
-        <div className={`font-mono text-[13px] font-medium ${timerColor}`}>
-          {minutes}:{seconds.toString().padStart(2, '0')}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 14px',
+          background: timerCritical ? 'var(--error-tint)' : 'var(--surface-2)',
+          border: `1px solid ${timerCritical ? 'var(--error)' : 'var(--border-default)'}`,
+          borderRadius: 100,
+        }}>
+          <Clock size={13} color={timerCritical ? 'var(--error)' : 'var(--text-tertiary)'} />
+          <span style={{
+            fontFamily: 'DM Mono, monospace', fontSize: 13, fontWeight: 500,
+            color: timerCritical ? 'var(--error)' : 'var(--text-secondary)',
+          }}>
+            {minutes}:{seconds.toString().padStart(2, '0')}
+          </span>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-4 pb-4">
-        {/* Plate tabs */}
-        <div className="flex gap-2 mb-4">
-          {plateTabs.map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 rounded-full text-[13px] font-medium border transition-colors ${
-                activeTab === tab
-                  ? 'bg-brand-tint border-brand text-brand'
-                  : 'bg-surface border-border-subtle text-text-secondary'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
+      <BookingStepper currentPath="/app/vehicle" />
 
-        {/* Plate input */}
-        <div className="mb-4">
-          <label className="text-[11px] text-text-tertiary uppercase tracking-wide mb-2 block">Plate number</label>
-          <div className="flex items-center gap-2 px-3 py-3 bg-surface border border-border-subtle rounded-xl">
-            <input
-              ref={inputRef}
-              type="text"
-              value={plateNumber}
-              onChange={e => handlePlateChange(e.target.value)}
-              placeholder="183 TN 24"
-              className="flex-1 bg-transparent font-mono text-[16px] font-medium tracking-[0.08em] text-text-primary placeholder:text-text-tertiary outline-none uppercase"
-              style={{ letterSpacing: '0.08em' }}
-            />
-            <button className="p-1.5 text-text-tertiary hover:text-text-secondary">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <rect x="3" y="7" width="18" height="12" rx="2" />
-                <circle cx="12" cy="13" r="3" />
-                <path d="M17 7v-2a2 2 0 00-2-2H9a2 2 0 00-2 2v2" />
-              </svg>
-            </button>
-          </div>
-        </div>
+      <div className="page-header">
+        <h1>Identify your vehicle</h1>
+        <p>Enter your plate number so we can verify your vehicle</p>
+      </div>
 
-        {/* Vehicle confirmed card */}
-        {vehicleConfirmed && (
-          <div className="p-4 bg-brand-tint border border-brand rounded-xl mb-4 animate-slide-up">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-brand flex items-center justify-center">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#001A0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20 6L9 17l-5-5" />
-                </svg>
-              </div>
-              <div>
-                <div className="text-[13px] font-medium text-brand">Vehicle confirmed</div>
-                <div className="text-[11px] text-text-secondary">183 · TN · 24 — Tesla Model 3</div>
-              </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 32, alignItems: 'start' }}>
+        {/* Form */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+          {/* Plate type tabs */}
+          <div>
+            <label className="field-label">Plate type</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {plateTabs.map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  style={{
+                    padding: '8px 20px', borderRadius: 8,
+                    fontSize: 13, fontWeight: 500,
+                    border: `1px solid ${activeTab === tab ? 'var(--green)' : 'var(--border-default)'}`,
+                    background: activeTab === tab ? 'var(--green-muted)' : 'var(--surface-2)',
+                    color: activeTab === tab ? 'var(--green)' : 'var(--text-secondary)',
+                    cursor: 'pointer', transition: 'all 120ms',
+                    fontFamily: 'DM Sans, sans-serif',
+                  }}
+                >
+                  {tab}
+                </button>
+              ))}
             </div>
           </div>
-        )}
 
-        {/* Chassis input */}
-        <div className="mb-4">
-          <label className="text-[11px] text-text-tertiary uppercase tracking-wide mb-2 block">Chassis number</label>
-          <div className="px-3 py-3 bg-surface border border-border-subtle rounded-xl">
+          {/* Plate input */}
+          <div>
+            <label className="field-label">Plate number</label>
+            <div style={{ position: 'relative' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center',
+                padding: '12px 16px',
+                background: 'var(--surface-2)',
+                border: `1px solid ${plateError ? 'var(--error)' : vehicleConfirmed ? 'var(--green)' : 'var(--border-default)'}`,
+                borderRadius: 10,
+                gap: 12,
+                transition: 'border-color 150ms',
+                boxShadow: vehicleConfirmed ? '0 0 0 3px var(--green-tint)' : plateError ? '0 0 0 3px var(--error-tint)' : 'none',
+              }}>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={plateNumber}
+                  onChange={e => handlePlateChange(e.target.value)}
+                  placeholder="183 TN 24"
+                  style={{
+                    flex: 1, background: 'none', border: 'none', outline: 'none',
+                    fontFamily: 'DM Mono, monospace',
+                    fontSize: 18, fontWeight: 500,
+                    letterSpacing: '0.1em',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+                
+                <button 
+  type="button"
+  onClick={() => fileInputRef.current?.click()}
+  disabled={isScanning}
+  style={{
+    background: 'none', border: 'none', cursor: isScanning ? 'wait' : 'pointer',
+    color: isScanning ? 'var(--green)' : 'var(--text-tertiary)', 
+    padding: 4, borderRadius: 6,
+    display: 'flex', alignItems: 'center',
+    opacity: isScanning ? 0.6 : 1
+  }}
+>
+  {/* Show a spinner if scanning, otherwise the camera icon */}
+  {isScanning ? (
+    <Loader2 size={18} className="animate-spin" />
+  ) : (
+    <Camera size={18} />
+  )}
+
+  {/* Hidden input field */}
+  <input 
+    type="file" 
+    ref={fileInputRef} 
+    onChange={handleOCR} 
+    accept="image/*" 
+    hidden 
+    capture="environment" 
+  />
+</button>
+                {vehicleConfirmed && (
+                  <div style={{
+                    width: 22, height: 22, borderRadius: '50%',
+                    background: 'var(--green)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    <Check size={13} color="#001a0d" strokeWidth={3} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {plateError && (
+              <div className="field-error">
+                <AlertCircle size={12} />
+                {plateError}
+              </div>
+            )}
+
+            {vehicleConfirmed && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                marginTop: 10,
+                padding: '10px 14px',
+                background: 'var(--green-tint)',
+                border: '1px solid #00c85325',
+                borderRadius: 8,
+              }} className="animate-fade-in">
+                <Car size={15} color="var(--green)" />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--green)' }}>Vehicle confirmed</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                    {plateNumber} — Tesla Model 3 (estimated)
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Chassis (optional) */}
+          <div>
+            <label className="field-label">
+              Chassis number <span style={{ color: 'var(--text-disabled)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
+            </label>
             <input
               type="text"
+              className="field-input"
               value={chassis}
               onChange={e => setChassis(e.target.value.toUpperCase())}
-              placeholder="......"
-              className="w-full bg-transparent font-mono text-[16px] font-medium tracking-[0.08em] text-text-primary placeholder:text-text-tertiary outline-none"
+              placeholder="VF1RFD..."
+              style={{ fontFamily: 'DM Mono, monospace', letterSpacing: '0.05em', fontSize: 13 }}
             />
+            <div className="field-hint">Required if plate lookup fails</div>
           </div>
+
+          {/* Divider */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div className="divider" style={{ flex: 1 }} />
+            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>or</span>
+            <div className="divider" style={{ flex: 1 }} />
+          </div>
+
+          <button
+            className="btn btn-ghost"
+            style={{ justifyContent: 'flex-start', gap: 8, color: 'var(--green)', fontSize: 13 }}
+            onClick={() => navigate('/app/foreign-vehicle')}
+          >
+            Using a foreign-registered vehicle? →
+          </button>
+
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button className="btn btn-primary btn-lg" onClick={handleContinue} style={{ flex: 1 }}>
+              Continue to verification
+              <ChevronRight size={16} />
+            </button>
+          </div>
+
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ color: 'var(--text-tertiary)', alignSelf: 'center' }}
+            onClick={() => navigate('/app/signin')}
+          >
+            Already have an account? Sign in
+          </button>
         </div>
 
-        {/* Divider */}
-        <div className="flex items-center gap-3 my-4">
-          <div className="flex-1 h-px bg-border-subtle" />
-          <span className="text-[11px] text-text-tertiary">or</span>
-          <div className="flex-1 h-px bg-border-subtle" />
+        {/* Right: booking summary */}
+        <div className="card-elevated" style={{ padding: 22 }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 16 }}>
+            Your booking
+          </div>
+          {[
+            { label: 'Station', value: reservation.station?.name || '—' },
+            { label: 'Date', value: reservation.date || '—' },
+            { label: 'Time', value: reservation.timeSlot || '—' },
+            { label: 'Duration', value: reservation.duration || '—' },
+            { label: 'Est. cost', value: reservation.estimatedCost ? `~${reservation.estimatedCost} DT` : '—' },
+          ].map(({ label, value }) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, alignItems: 'baseline' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{label}</span>
+              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', textAlign: 'right', maxWidth: '55%' }}>{value}</span>
+            </div>
+          ))}
         </div>
-
-        {/* Foreign vehicle link */}
-        <button
-          onClick={() => navigate('/app/foreign-vehicle')}
-          className="w-full text-center text-[13px] text-brand hover:text-brand-hover transition-colors mb-6"
-        >
-          Using a foreign vehicle? Tap here →
-        </button>
-      </div>
-
-      {/* CTA */}
-      <div className="px-4 pb-6 pt-2 bg-bg-base border-t border-border-subtle">
-        <button
-          onClick={() => navigate('/app/otp')}
-          className="w-full py-3 bg-brand text-brand-on rounded-lg text-[13px] font-medium hover:bg-brand-hover transition-colors"
-        >
-          Continue
-        </button>
-        <button
-          onClick={() => navigate('/app/signin')}
-          className="w-full mt-3 text-[12px] text-text-tertiary hover:text-text-secondary transition-colors"
-        >
-          Already have an account? Sign in
-        </button>
       </div>
     </div>
   );

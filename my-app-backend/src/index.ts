@@ -4,7 +4,9 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
+import ocrRoutes from './routes/ocr.routes';
 
+// ... other code
 
 dotenv.config();
 
@@ -29,6 +31,8 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 // ── 404 fallback ───────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ message: 'Not found' }));
+app.use('/api/ocr', ocrRoutes); // This makes the URL: http://localhost:4000/api/ocr/scan
+
 
 app.listen(PORT, () => {
   console.log(`[server] Running on http://localhost:${PORT}`);

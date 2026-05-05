@@ -1,157 +1,345 @@
-import { useMemo, useRef, useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { VoltaLogo } from '@/components/VoltaLogo';
-import { stations as allStations } from '@/lib/api';
-import type { Station } from '@/types';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import { Search, Filter, Zap, Clock, MapPin, ChevronRight, Wifi, WifiOff, AlertCircle } from 'lucide-react';
+import { stations } from '../lib/api';
+import type { Station } from '../types';
+import { useReservation } from '../context/ReservationContext';
+
+// Fix Leaflet default icon
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+});
+
+function createStationIcon(status: Station['status']) {
+  const color = status === 'available' ? '#00c853' : status === 'busy' ? '#f59e0b' : '#505050';
+  const svgStr = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">
+      <path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 22 14 22s14-11.5 14-22C28 6.3 21.7 0 14 0z"
+        fill="${color}" opacity="0.9"/>
+      <circle cx="14" cy="14" r="6" fill="white" opacity="0.95"/>
+      <circle cx="14" cy="14" r="3" fill="${color}"/>
+    </svg>`;
+  return L.divIcon({
+    html: svgStr,
+    className: '',
+    iconSize: [28, 36],
+    iconAnchor: [14, 36],
+    popupAnchor: [0, -38],
+  });
+}
+
+const STATUS_CONFIG = {
+  available: { label: 'Available', color: 'var(--green)', badge: 'badge-green' },
+  busy: { label: 'Busy', color: '#f59e0b', badge: 'badge-amber' },
+  offline: { label: 'Offline', color: 'var(--text-tertiary)', badge: 'badge-gray' },
+  maintenance: { label: 'Maintenance', color: '#f59e0b', badge: 'badge-amber' },
+};
+
+function StationCard({ station, onSelect, selected }: {
+  station: Station;
+  onSelect: (s: Station) => void;
+  selected: boolean;
+}) {
+  const cfg = STATUS_CONFIG[station.status];
+  return (
+    <button
+      onClick={() => onSelect(station)}
+      style={{
+        width: '100%',
+        background: selected ? 'var(--green-muted)' : 'var(--surface-1)',
+        border: `1px solid ${selected ? 'var(--green)' : 'var(--border-subtle)'}`,
+        borderRadius: 12,
+        padding: '14px 16px',
+        textAlign: 'left',
+        cursor: 'pointer',
+        transition: 'all 140ms',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+      onMouseEnter={e => {
+        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-strong)';
+      }}
+      onMouseLeave={e => {
+        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-subtle)';
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>
+            {station.name}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <MapPin size={11} />
+            {station.address || station.name} · {station.distance}
+          </div>
+        </div>
+        <span className={`badge ${cfg.badge}`}>
+          {cfg.label}
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-secondary)' }}>
+          <Zap size={12} color="var(--green)" />
+          {station.connectors} connectors
+        </div>
+        {station.status === 'available' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-secondary)' }}>
+            <Clock size={12} />
+            Next slot: Now
+          </div>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function MapFlyTo({ station }: { station: Station | null }) {
+  const map = useMap();
+  if (station) {
+    map.flyTo([station.lat, station.lng], 14, { duration: 0.8 });
+  }
+  return null;
+}
 
 export default function MapDiscovery() {
   const navigate = useNavigate();
-  const [stations] = useState<Station[]>(allStations);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sheetExpanded, setSheetExpanded] = useState(false);
-  const sheetRef = useRef<HTMLDivElement>(null);
+  const { update } = useReservation();
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'all' | 'available'>('all');
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
 
   const filtered = useMemo(() => {
-    if (!searchQuery.trim()) return stations;
-    return stations.filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()));
-  }, [stations, searchQuery]);
+    let list = stations;
+    if (filter === 'available') list = list.filter(s => s.status === 'available');
+    if (search.trim()) list = list.filter(s =>
+      s.name.toLowerCase().includes(search.toLowerCase()) ||
+      (s.address || '').toLowerCase().includes(search.toLowerCase())
+    );
+    return list;
+  }, [search, filter]);
+
+  const handleSelect = (station: Station) => {
+    setSelectedStation(station);
+  };
+
+  const handleBook = () => {
+    if (!selectedStation) return;
+    update({
+      station: {
+        id: selectedStation.id,
+        name: selectedStation.name,
+        address: selectedStation.address || selectedStation.name,
+        connectors: selectedStation.connectors,
+        status: selectedStation.status,
+      },
+    });
+    navigate('/app/time-slot');
+  };
 
   const availableCount = stations.filter(s => s.status === 'available').length;
 
   return (
-    <div className="w-full max-w-[390px] mx-auto bg-bg-base min-h-[100dvh] relative overflow-hidden">
-      {/* Map area */}
-      <div className="absolute inset-0 bg-[#111115]">
-        {/* Grid lines */}
-        <div className="absolute inset-0 opacity-20">
-          {Array.from({ length: 20 }).map((_, i) => (
-            <div key={i} className="absolute border-border-subtle/30" style={{ left: `${i * 5}%`, top: 0, bottom: 0, borderLeft: '1px solid' }} />
-          ))}
-          {Array.from({ length: 16 }).map((_, i) => (
-            <div key={i} className="absolute border-border-subtle/30" style={{ top: `${i * 6.25}%`, left: 0, right: 0, borderTop: '1px solid' }} />
-          ))}
-        </div>
+    <div style={{ display: 'flex', height: '100%', gap: 0 }}>
+      {/* Left panel */}
+      <div style={{
+        width: 380,
+        flexShrink: 0,
+        borderRight: '1px solid var(--border-subtle)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{ padding: '28px 24px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 20 }}>Charging stations</h2>
+          <p style={{ margin: 0, fontSize: 13 }}>{availableCount} available near you</p>
 
-        {/* Station pins */}
-        {stations.map((station, i) => {
-          const left = 20 + (i * 15) % 70;
-          const top = 25 + (i * 23) % 55;
-          const color = station.status === 'available' ? '#00E56B' : station.status === 'busy' ? '#EF9F27' : '#3A3A42';
-          const fill = station.status === 'available' ? '#0A3D2C' : station.status === 'busy' ? '#3D2400' : '#151519';
-          const isSelected = selectedStation?.id === station.id;
-          return (
-            <button
-              key={station.id}
-              className={`absolute transform -translate-x-1/2 -translate-y-1/2 transition-transform duration-200 ${isSelected ? 'scale-125' : ''} ${station.status === 'available' ? 'animate-pin-pulse' : ''}`}
-              style={{ left: `${left}%`, top: `${top}%`, animationDelay: `${i * 40}ms` }}
-              onClick={() => setSelectedStation(station)}
-            >
-              <svg width="28" height="36" viewBox="0 0 28 36" fill="none">
-                <path d="M14 0C6.268 0 0 6.268 0 14c0 10.5 14 22 14 22s14-11.5 14-22C28 6.268 21.732 0 14 0z" fill={fill} stroke={color} strokeWidth="1.5" />
-                <circle cx="14" cy="14" r="5" fill={color} />
-              </svg>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Top nav overlay */}
-      <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 pt-4 pb-2">
-        <VoltaLogo size={24} />
-        <button className="w-8 h-8 rounded-full bg-surface border border-border-subtle flex items-center justify-center">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888790" strokeWidth="1.5">
-            <circle cx="12" cy="8" r="4" />
-            <path d="M4 20c0-4 4-6 8-6s8 2 8 6" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Bottom sheet */}
-      <div
-        ref={sheetRef}
-        className={`absolute left-0 right-0 z-30 bg-surface rounded-t-[20px] border-t border-border-subtle transition-transform duration-300 ease-out ${
-          sheetExpanded ? 'top-[15%]' : 'top-[60%]'
-        }`}
-        style={{ transform: 'translateZ(0)' }}
-      >
-        {/* Handle bar */}
-        <button
-          className="w-full flex justify-center pt-3 pb-2"
-          onClick={() => setSheetExpanded(!sheetExpanded)}
-        >
-          <div className="w-9 h-1 bg-border-subtle rounded-full" />
-        </button>
-
-        <div className="px-4 pb-6">
           {/* Search */}
-          <div className="flex items-center gap-2 px-3 py-2.5 bg-bg-base border border-border-subtle rounded-lg mb-4">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#555560" strokeWidth="1.5">
-              <circle cx="11" cy="11" r="8" />
-              <path d="M21 21l-4.35-4.35" />
-            </svg>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            marginTop: 16,
+            padding: '9px 14px',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border-default)',
+            borderRadius: 9,
+          }}>
+            <Search size={15} color="var(--text-tertiary)" />
             <input
               type="text"
-              placeholder="Search stations..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="flex-1 bg-transparent text-[13px] text-text-primary placeholder:text-text-tertiary outline-none"
+              placeholder="Search by name or area..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{
+                flex: 1, background: 'none', border: 'none', outline: 'none',
+                fontSize: 13, color: 'var(--text-primary)',
+                fontFamily: 'DM Sans, sans-serif',
+              }}
             />
           </div>
 
-          {/* Available pill */}
-          <div className="mb-3">
-            <span className="inline-flex items-center px-3 py-1 bg-brand-tint border border-brand rounded-full text-[11px] font-medium text-brand">
-              {availableCount} stations available near you
-            </span>
-          </div>
-
-          {/* Station list */}
-          <div className="space-y-2 max-h-[50vh] overflow-y-auto no-scrollbar">
-            {filtered.map((station, i) => (
+          {/* Filter pills */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            {(['all', 'available'] as const).map(f => (
               <button
-                key={station.id}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl border text-left transition-all duration-200 ${
-                  selectedStation?.id === station.id
-                    ? 'bg-brand-tint border-brand'
-                    : 'bg-bg-base border-border-subtle hover:border-border-strong'
-                }`}
-                onClick={() => {
-                  setSelectedStation(station);
-                  // Navigate to time slot after brief delay
-                  setTimeout(() => navigate('/app/time-slot'), 200);
+                key={f}
+                onClick={() => setFilter(f)}
+                style={{
+                  padding: '5px 14px',
+                  borderRadius: 100,
+                  fontSize: 12, fontWeight: 500,
+                  border: `1px solid ${filter === f ? 'var(--green)' : 'var(--border-default)'}`,
+                  background: filter === f ? 'var(--green-muted)' : 'var(--surface-2)',
+                  color: filter === f ? 'var(--green)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  transition: 'all 120ms',
+                  fontFamily: 'DM Sans, sans-serif',
                 }}
-                style={{ animationDelay: `${i * 40}ms` }}
               >
-                <div className="flex-shrink-0">
-                  <div
-                    className={`w-2.5 h-2.5 rounded-full ${
-                      station.status === 'available'
-                        ? 'bg-brand'
-                        : station.status === 'busy'
-                        ? 'bg-warning'
-                        : 'bg-border-strong'
-                    }`}
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[13px] font-medium text-text-primary truncate">{station.name}</div>
-                  <div className="text-[10px] text-text-secondary">
-                    {station.connectors} connectors · {station.distance}
-                  </div>
-                </div>
-                <div className="flex-shrink-0">
-                  {station.status === 'available' ? (
-                    <span className="text-[11px] text-brand">Now +8 min</span>
-                  ) : station.status === 'offline' ? (
-                    <span className="text-[11px] text-text-tertiary">Offline</span>
-                  ) : (
-                    <span className="text-[11px] text-warning">Now +8 min</span>
-                  )}
-                </div>
+                {f === 'all' ? 'All stations' : 'Available only'}
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Station list */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }} className="no-scrollbar">
+          {filtered.length === 0 ? (
+            <div className="empty-state">
+              <MapPin size={32} />
+              <h3>No stations found</h3>
+              <p>Try adjusting your search or filter</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {filtered.map(station => (
+                <StationCard
+                  key={station.id}
+                  station={station}
+                  onSelect={handleSelect}
+                  selected={selectedStation?.id === station.id}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* CTA */}
+        {selectedStation && (
+          <div style={{
+            padding: '16px 20px',
+            borderTop: '1px solid var(--border-subtle)',
+            background: 'var(--surface-0)',
+          }} className="animate-fade-in">
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+              Selected: <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{selectedStation.name}</span>
+            </div>
+            <button
+              className="btn btn-primary"
+              style={{ width: '100%' }}
+              onClick={handleBook}
+              disabled={selectedStation.status === 'offline'}
+            >
+              <ChevronRight size={16} />
+              Book this station
+            </button>
+            {selectedStation.status === 'offline' && (
+              <p style={{ fontSize: 11, color: 'var(--error)', textAlign: 'center', margin: '8px 0 0' }}>
+                This station is currently offline
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Map */}
+      <div style={{ flex: 1, position: 'relative' }}>
+        <MapContainer
+          center={[36.84, 10.26]}
+          zoom={11}
+          style={{ width: '100%', height: '100%' }}
+          zoomControl={true}
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>'
+          />
+          <MapFlyTo station={selectedStation} />
+          {stations.map(station => (
+            <Marker
+              key={station.id}
+              position={[station.lat, station.lng]}
+              icon={createStationIcon(station.status)}
+              eventHandlers={{ click: () => handleSelect(station) }}
+            >
+              <Popup>
+                <div style={{ minWidth: 200 }}>
+                  <div style={{
+                    fontFamily: 'DM Sans, sans-serif',
+                    fontSize: 14, fontWeight: 600,
+                    color: 'var(--text-primary)',
+                    marginBottom: 6,
+                  }}>
+                    {station.name}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                    {station.address} · {station.distance}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                    <span className={`badge ${STATUS_CONFIG[station.status].badge}`} style={{ fontSize: 11 }}>
+                      {STATUS_CONFIG[station.status].label}
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Zap size={11} color="var(--green)" />
+                      {station.connectors} connectors
+                    </span>
+                  </div>
+                  <button
+                    onClick={handleBook}
+                    disabled={station.status === 'offline'}
+                    style={{
+                      width: '100%', padding: '8px 16px',
+                      background: station.status === 'offline' ? 'var(--surface-3)' : 'var(--green)',
+                      color: station.status === 'offline' ? 'var(--text-tertiary)' : '#001a0d',
+                      border: 'none', borderRadius: 8,
+                      fontSize: 13, fontWeight: 500,
+                      cursor: station.status === 'offline' ? 'not-allowed' : 'pointer',
+                      fontFamily: 'DM Sans, sans-serif',
+                    }}
+                  >
+                    {station.status === 'offline' ? 'Unavailable' : 'Book this station →'}
+                  </button>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+
+        {/* Map legend */}
+        <div style={{
+          position: 'absolute', bottom: 24, right: 16, zIndex: 1000,
+          background: 'rgba(15,15,15,0.92)',
+          border: '1px solid var(--border-default)',
+          borderRadius: 10,
+          padding: '10px 14px',
+          backdropFilter: 'blur(8px)',
+        }}>
+          {[
+            { color: '#00c853', label: 'Available' },
+            { color: '#f59e0b', label: 'Busy' },
+            { color: '#505050', label: 'Offline' },
+          ].map(({ color, label }) => (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'DM Sans, sans-serif' }}>{label}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
